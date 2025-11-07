@@ -49,6 +49,7 @@ export interface McDonaldOrder {
   type: 'Normal' | 'VIP';
   status: 'PENDING' | 'PROCESSING' | 'COMPLETE';
   botId: number | null;
+  startTime: number | null;
 }
 
 export interface McDonaldBot {

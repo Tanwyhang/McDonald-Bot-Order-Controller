@@ -16,18 +16,12 @@ type OrderManagerAction =
   | { type: 'START_PROCESSING'; payload: { botId: number; orderId: number } }
   | { type: 'COMPLETE_ORDER'; payload: { botId: number; orderId: number } }
   | { type: 'BOT_IDLE'; payload: { botId: number } }
-  | { type: 'RETURN_ORDER_TO_PENDING'; payload: { orderId: number } };
+  | { type: 'RETURN_ORDER_TO_PENDING'; payload: { orderId: number } }
+  | { type: 'SET_BOT_TIMER'; payload: { botId: number; timerId: NodeJS.Timeout | null } };
 
 const orderManagerReducer = (state: OrderManagerState, action: OrderManagerAction): OrderManagerState => {
   switch (action.type) {
     case 'ADD_ORDER': {
-      const newOrder: McDonaldOrder = {
-        id: state.nextOrderId,
-        type: action.payload.type,
-        status: 'PENDING',
-        botId: null,
-      };
-
       let updatedOrders: McDonaldOrder[];
       if (action.payload.type === 'VIP') {
         const lastVipIndex = state.orders.findLastIndex(
@@ -36,7 +30,13 @@ const orderManagerReducer = (state: OrderManagerState, action: OrderManagerActio
         if (lastVipIndex !== -1) {
           updatedOrders = [
             ...state.orders.slice(0, lastVipIndex + 1),
-            newOrder,
+            {
+              id: state.nextOrderId,
+              type: action.payload.type,
+              status: 'PENDING',
+              botId: null,
+              startTime: Date.now(),
+            },
             ...state.orders.slice(lastVipIndex + 1),
           ];
         } else {
@@ -46,15 +46,33 @@ const orderManagerReducer = (state: OrderManagerState, action: OrderManagerActio
           if (firstNormalIndex !== -1) {
             updatedOrders = [
               ...state.orders.slice(0, firstNormalIndex),
-              newOrder,
+              {
+                id: state.nextOrderId,
+                type: action.payload.type,
+                status: 'PENDING',
+                botId: null,
+                startTime: Date.now(),
+              },
               ...state.orders.slice(firstNormalIndex),
             ];
           } else {
-            updatedOrders = [...state.orders, newOrder];
+            updatedOrders = [...state.orders, {
+              id: state.nextOrderId,
+              type: action.payload.type,
+              status: 'PENDING',
+              botId: null,
+              startTime: Date.now(),
+            }];
           }
         }
       } else {
-        updatedOrders = [...state.orders, newOrder];
+        updatedOrders = [...state.orders, {
+          id: state.nextOrderId,
+          type: action.payload.type,
+          status: 'PENDING',
+          botId: null,
+          startTime: Date.now(),
+        }];
       }
       return { ...state, orders: updatedOrders, nextOrderId: state.nextOrderId + 1 };
     }
@@ -86,6 +104,7 @@ const orderManagerReducer = (state: OrderManagerState, action: OrderManagerActio
                 type: order.type,
                 status: 'PENDING',
                 botId: null,
+                startTime: null,
               };
             }
             return order;
@@ -102,7 +121,7 @@ const orderManagerReducer = (state: OrderManagerState, action: OrderManagerActio
         ...state,
         orders: state.orders.map((order): McDonaldOrder => {
             if (order.id === orderId) {
-                return { ...order, status: 'PROCESSING', botId };
+                return { ...order, status: 'PROCESSING', botId, startTime: Date.now() };
             }
             return order;
         }),
@@ -121,7 +140,7 @@ const orderManagerReducer = (state: OrderManagerState, action: OrderManagerActio
         ...state,
         orders: state.orders.map((order): McDonaldOrder => {
             if (order.id === orderId) {
-                return { ...order, status: 'COMPLETE', botId: null };
+                return { ...order, status: 'COMPLETE', botId: null, startTime: null };
             }
             return order;
         }),
@@ -153,9 +172,22 @@ const orderManagerReducer = (state: OrderManagerState, action: OrderManagerActio
         ...state,
         orders: state.orders.map((order): McDonaldOrder => {
           if (order.id === orderId) {
-            return { ...order, status: 'PENDING', botId: null };
+            return { ...order, status: 'PENDING', botId: null, startTime: null };
           }
           return order;
+        }),
+      };
+    }
+
+    case 'SET_BOT_TIMER': {
+      const { botId, timerId } = action.payload;
+      return {
+        ...state,
+        bots: state.bots.map((bot): McDonaldBot => {
+          if (bot.id === botId) {
+            return { ...bot, timerId };
+          }
+          return bot;
         }),
       };
     }
@@ -175,49 +207,55 @@ const initialState: OrderManagerState = {
 // --- Custom Hook ---
 export const useOrderManager = () => {
   const [state, dispatch] = useReducer(orderManagerReducer, initialState);
-  const processingTimers = useRef<Map<number, NodeJS.Timeout>>(new Map());
+
+  const botsRef = useRef<McDonaldBot[]>(state.bots);
+
+  useEffect(() => {
+    botsRef.current = state.bots;
+  }, [state.bots]);
+
+  useEffect(() => {
+    return () => {
+      botsRef.current.forEach((bot) => {
+        if (bot.timerId) {
+          clearTimeout(bot.timerId);
+        }
+      });
+    };
+  }, []);
 
   // Effect for bot processing logic
   useEffect(() => {
-    state.bots.forEach((bot) => {
-      if (bot.status === 'IDLE') {
-        const pendingOrders = state.orders
-          .filter((order) => order.status === 'PENDING' && order.botId === null) // Only truly pending and unassigned orders
-          .sort((a, b) => {
-            if (a.type === 'VIP' && b.type === 'Normal') return -1;
-            if (a.type === 'Normal' && b.type === 'VIP') return 1;
-            return a.id - b.id;
-          });
+    const idleBots = state.bots.filter((bot) => bot.status === 'IDLE');
+    const availablePendingOrders = state.orders
+      .filter((order) => order.status === 'PENDING' && order.botId === null)
+      .sort((a, b) => {
+        if (a.type === 'VIP' && b.type === 'Normal') return -1;
+        if (a.type === 'Normal' && b.type === 'VIP') return 1;
+        return a.id - b.id;
+      });
 
-        if (pendingOrders.length > 0) {
-          const orderToProcess = pendingOrders[0]; // Take the highest priority pending order
+    // Assign orders to idle bots
+    idleBots.forEach((bot) => {
+      if (availablePendingOrders.length > 0) {
+        const orderToProcess = availablePendingOrders.shift(); // Take the highest priority pending order and remove it
 
-          // Dispatch action to mark order and bot as processing
+        if (orderToProcess) {
           dispatch({ type: 'START_PROCESSING', payload: { botId: bot.id, orderId: orderToProcess.id } });
         }
       }
-
-      // Manage processing timers for bots
-      if (bot.status === 'PROCESSING' && bot.currentOrderId !== null) {
-        // Set a timer for completion if not already set
-        if (!processingTimers.current.has(bot.id)) {
-          const timer = setTimeout(() => {
-            dispatch({ type: 'COMPLETE_ORDER', payload: { botId: bot.id, orderId: bot.currentOrderId! } });
-          }, 5000); // 5 seconds
-          processingTimers.current.set(bot.id, timer);
-        }
-      } else if (bot.status === 'IDLE' && processingTimers.current.has(bot.id)) {
-        // Clear timer if bot becomes idle unexpectedly (e.g., order returned to pending)
-        clearTimeout(processingTimers.current.get(bot.id)!);
-        processingTimers.current.delete(bot.id);
-      }
     });
 
-    // Cleanup function for timers when component unmounts or state changes
-    return () => {
-      processingTimers.current.forEach((timer) => clearTimeout(timer));
-      processingTimers.current.clear();
-    };
+    // Manage processing timers for bots
+    state.bots.forEach((bot) => {
+      if (bot.status === 'PROCESSING' && bot.currentOrderId !== null && bot.timerId === null) {
+        // Set a timer for completion if not already set
+        const timer = setTimeout(() => {
+          dispatch({ type: 'COMPLETE_ORDER', payload: { botId: bot.id, orderId: bot.currentOrderId! } });
+        }, 5000); // 5 seconds
+        dispatch({ type: 'SET_BOT_TIMER', payload: { botId: bot.id, timerId: timer } });
+      }
+    });
   }, [state.orders, state.bots]); // Re-run effect when orders or bots change
 
   const addNormalOrder = () => dispatch({ type: 'ADD_ORDER', payload: { type: 'Normal' } });
