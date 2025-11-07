@@ -20,7 +20,7 @@ const McDonaldsOrderControllerPage = () => {
 
   return (
     <div className="container mx-auto p-4">
-      <h1 className="text-3xl font-bold mb-6 text-center">McDonald's Order Controller</h1>
+  <h1 className="text-3xl font-bold mb-6 text-center">McDonald&apos;s Order Controller</h1>
       <div className="grid grid-cols-1 md:grid-cols-4 gap-6">
         {/* Column 1: Controls */}
         <div className="col-span-1 space-y-6">

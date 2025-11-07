@@ -1,5 +1,5 @@
 {
-  "name": "bb-delivery",
+  "name": "mcd-order-bot",
   "version": "0.1.0",
   "private": true,
   "scripts": {
@@ -10,7 +10,7 @@
     "test": "jest",
     "docs": "typedoc --plugin typedoc-plugin-markdown"
   },
-  "dependencies": {
+  "dependenciFes": {
     "@radix-ui/react-alert-dialog": "^1.1.15",
     "@radix-ui/react-label": "^2.1.7",
     "@radix-ui/react-select": "^2.2.6",
